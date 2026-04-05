@@ -16,6 +16,7 @@ from ..audio.dataset import SongDataset, DatasetEntry, create_entry
 from ..audio.mix import create_mashup, MashabilityResult, calculate_mashability, MashupMode
 from ..audio.separation import demucs_separate
 from ..util import YouTubeURL, get_url
+from ..util.load import DownloadError
 from numpy.typing import NDArray
 import librosa
 import base64
@@ -634,7 +635,7 @@ def mashup_song(link: YouTubeURL, config: MashupConfig, dataset: SongDataset | N
                 config=config,
             )
             break
-        except BadMashup as e:
+        except (BadMashup, DownloadError) as e:
             write(f">>> Mashup {i} ({best_result.url}) failed: {e}")
 
     if mashup is None or submitted_audio_a is None or submitted_audio_b is None or mashup_id is None or best_result is None:
@@ -702,33 +703,49 @@ def mashup_from_audio(audio: Audio, config: MashupConfig):
         raise InvalidMashup("No suitable songs found in the dataset.")
     write(f"Got {len(scores)} results.")
 
-    best_result_idx = 0
-    best_result = scores[best_result_idx][1]
+    best_result_idx = -1
+    mashup: Audio | None = None
+    submitted_audio_a: Audio | None = None
+    submitted_audio_b: Audio | None = None
+    mashup_id: MashupID | None = None
+    best_result: MashabilityResult | None = None
 
     a_audio = audio.slice_seconds(slice_start_a, slice_end_a)
 
     if config._skip_mashup:
         return a_audio, scores, "Skipped mashup"
 
-    # Create mashup
-    submitted_audio_a, submitted_audio_b, mashup = create_mash(
-        dataset,
-        a_audio,
-        song_a_entry,
-        demucs_separate(a_audio),
-        best_result.url,
-        best_result.start_bar,
-        best_result.transpose,
-        config,
-    )
+    submitted_parts_a = demucs_separate(a_audio)
 
-    mashup_id = MashupID(
-        song_a=YouTubeURL.get_placeholder(),
-        song_a_start_time=config.starting_point,
-        song_b=best_result.url,
-        song_b_start_bar=best_result.start_bar,
-        transpose=best_result.transpose,
-    )
+    for i in range(len(scores)):
+        best_result = scores[i][1]
+        best_result_idx = i
+        try:
+            # Create mashup
+            submitted_audio_a, submitted_audio_b, mashup = create_mash(
+                dataset,
+                a_audio,
+                song_a_entry,
+                submitted_parts_a,
+                best_result.url,
+                best_result.start_bar,
+                best_result.transpose,
+                config,
+            )
+
+            mashup_id = MashupID(
+                song_a=YouTubeURL.get_placeholder(),
+                song_a_start_time=config.starting_point,
+                song_b=best_result.url,
+                song_b_start_bar=best_result.start_bar,
+                transpose=best_result.transpose,
+            )
+            break
+        except (BadMashup, DownloadError) as e:
+            write(f">>> Mashup {i} ({best_result.url}) failed: {e}")
+
+    if mashup is None or submitted_audio_a is None or submitted_audio_b is None or mashup_id is None or best_result is None:
+        raise InvalidMashup("No suitable songs to create mashup")
 
     system_messages = get_search_result_log(
         YouTubeURL.get_placeholder(),
