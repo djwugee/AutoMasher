@@ -5,7 +5,9 @@ A full-featured GUI for creating music mashups using the AutoMasher backend.
 
 import os
 import base64
+import io
 import traceback
+import wave
 from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 
@@ -74,8 +76,19 @@ def get_chord_metric_reverse_map() -> Dict[ChordMetric, str]:
 
 
 def audio_to_bytes(audio: Audio) -> bytes:
-    """Convert Audio object to bytes for Streamlit audio player."""
-    return audio.numpy().tobytes()
+    """Convert an Audio object into WAV bytes suitable for download."""
+    audio_samples = np.asarray(audio.numpy(), dtype=np.float32)
+    pcm_samples = np.clip(audio_samples, -1.0, 1.0)
+    pcm_samples = (pcm_samples * np.iinfo(np.int16).max).astype(np.int16)
+
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(np.dtype(np.int16).itemsize)
+        wav_file.setframerate(int(audio.sample_rate))
+        wav_file.writeframes(pcm_samples.tobytes())
+
+    return wav_buffer.getvalue()
 
 
 def get_base64_logo() -> str:
@@ -517,7 +530,7 @@ def render_output_section():
         )
         
         # Download button
-        audio_bytes = st.session_state.output_audio.numpy().tobytes()
+        audio_bytes = audio_to_bytes(st.session_state.output_audio)
         st.download_button(
             label="📥 Download Mashup",
             data=audio_bytes,
